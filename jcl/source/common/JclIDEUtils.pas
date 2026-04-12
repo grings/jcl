@@ -403,9 +403,9 @@ type
     function GetMake: IJclCommandLineTool;
     function GetDescription: string;
     function GetEditionAsText: string;
-    function GetIdeExeFileName: string;
+    function GetIdeExeFileName(x64: Boolean): string;
     function GetGlobals: TStrings;
-    function GetIdeExeBuildNumber: string;
+    function GetIdeExeBuildNumber(x64: Boolean): string;
     function GetIdePackages: TJclBorRADToolIdePackages;
     function GetIsTurboExplorer: Boolean;
     function GetLatestUpdatePack: Integer;
@@ -563,8 +563,8 @@ type
     property EnvironmentVariables: TStrings read GetEnvironmentVariables;
     property IdePackages: TJclBorRADToolIdePackages read GetIdePackages;
     property IdeTools: TJclBorRADToolIdeTool read FIdeTools;
-    property IdeExeBuildNumber: string read GetIdeExeBuildNumber;
-    property IdeExeFileName: string read GetIdeExeFileName;
+    property IdeExeBuildNumber[x64: Boolean]: string read GetIdeExeBuildNumber;
+    property IdeExeFileName[x64: Boolean]: string read GetIdeExeFileName;
     property InstalledUpdatePack: Integer read FInstalledUpdatePack;
     property LatestUpdatePack: Integer read GetLatestUpdatePack;
     property LibrarySearchPath[APlatform: TJclBDSPlatform]: TJclBorRADToolPath read GetLibrarySearchPath {$IFDEF KEEP_DEPRECATED}write SetRawLibrarySearchPath{$ENDIF};
@@ -1638,7 +1638,7 @@ begin
     if FDisabledPackages32.IndexOfName(FKnownPackages32.Names[I]) <> -1 then
       FKnownPackages32.Objects[I] := Pointer(True);
 
-  if Installation.IDEVersionNumber >= 23 then
+  if FileExists(Installation.IdeExeFileName[True]) then
   begin
     ReadPackageList(GetKnownIDEPackagesKeyName(True), FKnownIDEPackages64);
     ReadPackageList(GetKnownPackagesKeyName(True), FKnownPackages64);
@@ -2144,7 +2144,7 @@ begin
     if RunningProcessesList(Processes) then
     begin
       for I := 0 to Processes.Count - 1 do
-        if AnsiSameText(IdeExeFileName, Processes[I]) then
+        if StrIsOneOf(Processes[I], [IdeExeFileName[False], IdeExeFileName[True]]) then
         begin
           Result := True;
           Break;
@@ -2547,14 +2547,14 @@ begin
   Result := FGlobals;
 end;
 
-function TJclBorRADToolInstallation.GetIdeExeFileName: string;
+function TJclBorRADToolInstallation.GetIdeExeFileName(x64: Boolean): string;
 begin
-  Result := Globals.Values['App'];
+  Result := Globals.Values[Iff(x64, 'App x64', 'App')];
 end;
 
-function TJclBorRADToolInstallation.GetIdeExeBuildNumber: string;
+function TJclBorRADToolInstallation.GetIdeExeBuildNumber(x64: Boolean): string;
 begin
-  Result := VersionFixedFileInfoString(IdeExeFileName, vfFull);
+  Result := VersionFixedFileInfoString(IdeExeFileName[x64], vfFull);
 end;
 
 function TJclBorRADToolInstallation.GetIdePackages: TJclBorRADToolIdePackages;
@@ -2734,7 +2734,8 @@ end;
 
 function TJclBorRADToolInstallation.GetValid: Boolean;
 begin
-  Result := (ConfigData.FileName <> '') and (RootDir <> '') and FileExists(IdeExeFileName);
+  Result := (ConfigData.FileName <> '') and (RootDir <> '') and
+            (FileExists(IdeExeFileName[False]) or FileExists(IdeExeFileName[True]));
 end;
 
 function TJclBorRADToolInstallation.GetVclIncludeDir(APlatform: TJclBDSPlatform): string;
