@@ -475,6 +475,7 @@ type
     function GetCompilerSettingsFormat: TJclCompilerSettingsFormat;
     function GetSupportsNoConfig: Boolean;
     function GetSupportsPlatform: Boolean;
+    function GetSupportsLSIF: Boolean;
 
     procedure CheckPlatform(APlatform: TJclBDSPlatform);
     procedure CheckCBuilderPlatform(APlatform: TJclBDSPlatform);
@@ -608,6 +609,7 @@ type
     property CompilerSettingsFormat: TJclCompilerSettingsFormat read GetCompilerSettingsFormat;
     property SupportsNoConfig: Boolean read GetSupportsNoConfig;
     property SupportsPlatform: Boolean read GetSupportsPlatform;
+    property SupportsLSIF: Boolean read GetSupportsLSIF;
     property IsDcc64: Boolean read GetIsDcc64;
   end;
 
@@ -2718,6 +2720,11 @@ end;
 function TJclBorRADToolInstallation.GetSupportsPlatform: Boolean;
 begin
   Result := (RadToolKind = brBorlandDevStudio) and (VersionNumber >= 9);
+end;
+
+function TJclBorRADToolInstallation.GetSupportsLSIF: Boolean;
+begin
+  Result := (IDEVersionNumber >= 37) and (IDEUpdateNumber >= 1); // Delphi 13.1+
 end;
 
 function TJclBorRADToolInstallation.GetUpdateNeeded: Boolean;
