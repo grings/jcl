@@ -2631,11 +2631,13 @@ var
     I: Integer;
   begin
     for I := Low(ImageSectionHeaders) to High(ImageSectionHeaders) do
+    begin
       // Sections with no raw data on disk (e.g. .bss, .tls) have PointerToRawData = 0
       // and must keep it. Only shift sections that actually have raw data, otherwise
       // they end up with a bogus non-zero file offset.
       if ImageSectionHeaders[I].PointerToRawData <> 0 then
         ImageSectionHeaders[I].PointerToRawData := ImageSectionHeaders[I].PointerToRawData + AOffset;
+    end;
   end;
 
   procedure FillZeros(AStream: TStream; ACount: Integer);
@@ -2701,13 +2703,14 @@ var
       raise EJclPeImageError.CreateRes(@SWriteError);
   end;
 
-  procedure CheckHeadersSpace(AStream: TStream; AFileAlignment: DWORD; var ASizeOfHeaders: DWORD);
+  procedure AdjustHeadersSpace(AStream: TStream; AFileAlignment: DWORD; var ASizeOfHeaders: DWORD);
   begin
     if ImageSectionHeaders[0].PointerToRawData < ImageSectionHeadersPosition +
        (SizeOf(TImageSectionHeader) * (Length(ImageSectionHeaders) + 1)) then
     begin
       MoveData(AStream, ImageSectionHeaders[0].PointerToRawData, AFileAlignment);
       MovePointerToRawData(AFileAlignment);
+
       // The header area was grown by one FileAlignment block to make room for the new
       // section header. SizeOfHeaders must grow with it; otherwise the section table
       // extends past SizeOfHeaders and the first section's raw data no longer starts at
@@ -2769,8 +2772,8 @@ begin
               Exit;
             end;
 
-            // Check if there is enough space for an additional section header
-            CheckHeadersSpace(ImageStream, NtHeaders32.OptionalHeader.FileAlignment, NtHeaders32.OptionalHeader.SizeOfHeaders);
+            // Make room for an additional section header (and grow SizeOfHeaders) if needed
+            AdjustHeadersSpace(ImageStream, NtHeaders32.OptionalHeader.FileAlignment, NtHeaders32.OptionalHeader.SizeOfHeaders);
 
             JclDebugSectionPosition := ImageSectionHeadersPosition + (SizeOf(ImageSectionHeaders[0]) * Length(ImageSectionHeaders));
             LastSection := @ImageSectionHeaders[High(ImageSectionHeaders)];
@@ -2814,8 +2817,8 @@ begin
               Exit;
             end;
 
-            // Check if there is enough space for an additional section header
-            CheckHeadersSpace(ImageStream, NtHeaders64.OptionalHeader.FileAlignment, NtHeaders64.OptionalHeader.SizeOfHeaders);
+            // Make room for an additional section header (and grow SizeOfHeaders) if needed
+            AdjustHeadersSpace(ImageStream, NtHeaders64.OptionalHeader.FileAlignment, NtHeaders64.OptionalHeader.SizeOfHeaders);
 
             JclDebugSectionPosition := ImageSectionHeadersPosition + (SizeOf(ImageSectionHeaders[0]) * Length(ImageSectionHeaders));
             LastSection := @ImageSectionHeaders[High(ImageSectionHeaders)];
@@ -2870,6 +2873,7 @@ begin
   finally
     ImageStream.Free;
   end;
+
   // Inserting the section invalidated the original PE checksum. Recompute it now that
   // the exclusive stream is closed (MapAndLoad needs its own handle). Signing tools
   // rewrite the checksum themselves, but a correct value is expected by some loaders

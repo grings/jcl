@@ -5279,6 +5279,7 @@ function PeInsertSection(const FileName: TFileName; SectionStream: TStream; Sect
     if (Value mod Alignment) <> 0 then
       Value := ((Value div Alignment) + 1) * Alignment;
   end;
+
   // Insert ACount zero bytes at file offset AOffset in the in-memory image, shifting
   // everything from AOffset onward forward by ACount. Used to enlarge the header area
   // so that another section header fits before the first section's raw data.
@@ -5311,10 +5312,53 @@ function PeInsertSection(const FileName: TFileName; SectionStream: TStream; Sect
     ImageStream.Position := AOffset;
     ImageStream.WriteBuffer(Buffer[0], ACount);
   end;
+
+  // Ensure the section header table has room for one more entry before the first
+  // section's raw data. When it does not, a single FileAlignment block of zero bytes
+  // is inserted into the header area and every populated section's PointerToRawData is
+  // shifted forward to match; the function then returns True so the caller can grow
+  // SizeOfHeaders in step. Without that the section table runs past SizeOfHeaders and,
+  // while Windows still loads the image, strict PE validators such as signtool reject
+  // it with ERROR_BAD_EXE_FORMAT (0x800700C1).
+  // The section table sits at the same file offset for 32- and 64-bit images, so the
+  // 32-bit mapping helpers locate it correctly for both targets; only the per-target
+  // OptionalHeader.SizeOfHeaders (updated by the caller) lives at a different offset.
+  // NOTE: ImageStream.Memory may be reallocated, so the caller must re-fetch any
+  // pointers into it whenever this returns True.
+  function EnsureSectionHeaderSpace(ImageStream: TMemoryStream;
+    NumberOfSections: Integer; FileAlignment: DWORD): Boolean;
+  var
+    Sections, SecPtr: PImageSectionHeader;
+    FirstRawData: DWORD;
+    NewSectionTableEnd: TJclAddr;
+    I: Integer;
+  begin
+    Sections := PeMapImgSections32(PeMapImgNtHeaders32(ImageStream.Memory));
+    FirstRawData := Sections^.PointerToRawData;
+    NewSectionTableEnd := (TJclAddr(Sections) - TJclAddr(ImageStream.Memory)) +
+      TJclAddr(SizeOf(TImageSectionHeader)) * TJclAddr(NumberOfSections + 1);
+    Result := NewSectionTableEnd > FirstRawData;
+    if not Result then
+      Exit;
+
+    InsertHeaderSpace(ImageStream, FirstRawData, FileAlignment);
+
+    // ImageStream.Memory may have been reallocated -> re-fetch before shifting.
+    Sections := PeMapImgSections32(PeMapImgNtHeaders32(ImageStream.Memory));
+    SecPtr := Sections;
+    for I := 0 to NumberOfSections - 1 do
+    begin
+      // Sections with no raw data on disk (e.g. .bss, .tls) keep PointerToRawData = 0.
+      if SecPtr^.PointerToRawData <> 0 then
+        Inc(SecPtr^.PointerToRawData, FileAlignment);
+      Inc(SecPtr);
+    end;
+  end;
+
   function PeInsertSection32(ImageStream: TMemoryStream): Boolean;
   var
     NtHeaders: PImageNtHeaders32;
-    Sections, LastSection, NewSection, SecPtr: PImageSectionHeader;
+    Sections, LastSection, NewSection: PImageSectionHeader;
     VirtualAlignedSize, FileAlignment: DWORD;
     I, X, NeedFill: Integer;
     SectionDataSize: Integer;
@@ -5336,35 +5380,21 @@ function PeInsertSection(const FileName: TFileName; SectionStream: TStream; Sect
 
       FileAlignment := NtHeaders^.OptionalHeader.FileAlignment;
 
+      // Make room for the new section header when it would not fit before the first
+      // section's raw data, growing SizeOfHeaders in step so the image stays valid for
+      // strict PE validators (e.g. signtool, ERROR_BAD_EXE_FORMAT otherwise).
+      if EnsureSectionHeaderSpace(ImageStream, NtHeaders^.FileHeader.NumberOfSections, FileAlignment) then
+      begin
+        // ImageStream.Memory was reallocated -> re-fetch the typed pointers.
+        NtHeaders := PeMapImgNtHeaders32(ImageStream.Memory);
+        Sections := PeMapImgSections32(NtHeaders);
+        Inc(NtHeaders^.OptionalHeader.SizeOfHeaders, FileAlignment);
+      end;
+
       LastSection := Sections;
       Inc(LastSection, NtHeaders^.FileHeader.NumberOfSections - 1);
       NewSection := LastSection;
       Inc(NewSection);
-
-      // Make room in the header area when the new section header would not fit before
-      // the first section's raw data. Without this the header is written over the first
-      // section's data; growing SizeOfHeaders in step keeps the image valid for strict
-      // PE validators (e.g. signtool, which otherwise fails with ERROR_BAD_EXE_FORMAT).
-      if TJclAddr(NewSection) - TJclAddr(ImageStream.Memory) + DWORD(SizeOf(TImageSectionHeader)) > Sections^.PointerToRawData then
-      begin
-        InsertHeaderSpace(ImageStream, Sections^.PointerToRawData, FileAlignment);
-        // ImageStream.Memory may have been reallocated -> re-fetch the pointers.
-        NtHeaders := PeMapImgNtHeaders32(ImageStream.Memory);
-        Sections := PeMapImgSections32(NtHeaders);
-        SecPtr := Sections;
-        for I := 0 to NtHeaders^.FileHeader.NumberOfSections - 1 do
-        begin
-          // sections with no raw data on disk keep PointerToRawData = 0
-          if SecPtr^.PointerToRawData <> 0 then
-            Inc(SecPtr^.PointerToRawData, FileAlignment);
-          Inc(SecPtr);
-        end;
-        Inc(NtHeaders^.OptionalHeader.SizeOfHeaders, FileAlignment);
-        LastSection := Sections;
-        Inc(LastSection, NtHeaders^.FileHeader.NumberOfSections - 1);
-        NewSection := LastSection;
-        Inc(NewSection);
-      end;
 
       // Increase the number of sections
       Inc(NtHeaders^.FileHeader.NumberOfSections);
@@ -5412,7 +5442,7 @@ function PeInsertSection(const FileName: TFileName; SectionStream: TStream; Sect
   function PeInsertSection64(ImageStream: TMemoryStream): Boolean;
   var
     NtHeaders: PImageNtHeaders64;
-    Sections, LastSection, NewSection, SecPtr: PImageSectionHeader;
+    Sections, LastSection, NewSection: PImageSectionHeader;
     VirtualAlignedSize, FileAlignment: DWORD;
     I, X, NeedFill: Integer;
     SectionDataSize: Integer;
@@ -5434,35 +5464,21 @@ function PeInsertSection(const FileName: TFileName; SectionStream: TStream; Sect
 
       FileAlignment := NtHeaders^.OptionalHeader.FileAlignment;
 
+      // Make room for the new section header when it would not fit before the first
+      // section's raw data, growing SizeOfHeaders in step so the image stays valid for
+      // strict PE validators (e.g. signtool, ERROR_BAD_EXE_FORMAT otherwise).
+      if EnsureSectionHeaderSpace(ImageStream, NtHeaders^.FileHeader.NumberOfSections, FileAlignment) then
+      begin
+        // ImageStream.Memory was reallocated -> re-fetch the typed pointers.
+        NtHeaders := PeMapImgNtHeaders64(ImageStream.Memory);
+        Sections := PeMapImgSections64(NtHeaders);
+        Inc(NtHeaders^.OptionalHeader.SizeOfHeaders, FileAlignment);
+      end;
+
       LastSection := Sections;
       Inc(LastSection, NtHeaders^.FileHeader.NumberOfSections - 1);
       NewSection := LastSection;
       Inc(NewSection);
-
-      // Make room in the header area when the new section header would not fit before
-      // the first section's raw data. Without this the header is written over the first
-      // section's data; growing SizeOfHeaders in step keeps the image valid for strict
-      // PE validators (e.g. signtool, which otherwise fails with ERROR_BAD_EXE_FORMAT).
-      if TJclAddr(NewSection) - TJclAddr(ImageStream.Memory) + DWORD(SizeOf(TImageSectionHeader)) > Sections^.PointerToRawData then
-      begin
-        InsertHeaderSpace(ImageStream, Sections^.PointerToRawData, FileAlignment);
-        // ImageStream.Memory may have been reallocated -> re-fetch the pointers.
-        NtHeaders := PeMapImgNtHeaders64(ImageStream.Memory);
-        Sections := PeMapImgSections64(NtHeaders);
-        SecPtr := Sections;
-        for I := 0 to NtHeaders^.FileHeader.NumberOfSections - 1 do
-        begin
-          // sections with no raw data on disk keep PointerToRawData = 0
-          if SecPtr^.PointerToRawData <> 0 then
-            Inc(SecPtr^.PointerToRawData, FileAlignment);
-          Inc(SecPtr);
-        end;
-        Inc(NtHeaders^.OptionalHeader.SizeOfHeaders, FileAlignment);
-        LastSection := Sections;
-        Inc(LastSection, NtHeaders^.FileHeader.NumberOfSections - 1);
-        NewSection := LastSection;
-        Inc(NewSection);
-      end;
 
       // Increase the number of sections
       Inc(NtHeaders^.FileHeader.NumberOfSections);
