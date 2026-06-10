@@ -43,10 +43,10 @@ Start the **jcl\install.bat**
 
 **Installation notes**
 
-As the installer uses the command line compiler of the installed Delphi version, the installer will only
-function with Delphi versions/editions that have the command line compile (ddc32).
+As the installer uses the command-line compiler of the installed Delphi version, the installer will only
+function with Delphi versions/editions that have the command-line compiler (dcc32).
 
-Neither the community version, nor the trial version provide the command line compiler.
+Neither the community version, nor the trial version provide the command-line compiler.
 
 For manual installation see the section in **jcl\docs\Readme.txt**.
 
