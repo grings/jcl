@@ -1734,13 +1734,13 @@ begin
         opNotEqual:
           Result := LeftString <> RightString;
         opLess:
-          Result := StrToInt64(LeftString) < StrToInt64(RightString);
+          Result := StrToInt64Def(LeftString, High(Int64)) < StrToInt64Def(RightString, Low(Int64));
         opLessOrEqual:
-          Result := StrToInt64(LeftString) <= StrToInt64(RightString);
+          Result := StrToInt64Def(LeftString, High(Int64)) <= StrToInt64Def(RightString, Low(Int64));
         opGreater:
-          Result := StrToInt64(LeftString) > StrToInt64(RightString);
+          Result := StrToInt64Def(LeftString, Low(Int64)) > StrToInt64Def(RightString, High(Int64));
         OpGreaterOrEqual:
-          Result := StrToInt64(LeftString) >= StrToInt64(RightString);
+          Result := StrToInt64Def(LeftString, Low(Int64)) >= StrToInt64Def(RightString, High(Int64));
       end;
     end
     else
